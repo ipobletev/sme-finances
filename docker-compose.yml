@@ -1,0 +1,120 @@
+version: "3.7"
+
+networks:
+  monitor-net:
+    name: main_network
+
+x-common:
+  &common
+  networks:
+    - monitor-net
+  user: "${USER_ID}:${GROUP_ID}"
+  restart: unless-stopped
+
+volumes:
+  mariadb-data:
+    name: "mariadb-data"
+  grafana-data:
+    name: "grafana-data"
+  prometheus-data:
+    name: "prometheus-data"
+  node-exporter-data:
+    name: "node-exporter-data"
+
+services:
+#----------------------------------------------
+# Monitoring services
+#----------------------------------------------
+  node-exporter:
+    <<: *common
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node-exporter
+    command:
+      - '--path.rootfs=/host'
+    pid: host
+    volumes:
+      - node-exporter-data:/host:ro,rslave'
+
+  cadvisor:
+    <<: *common
+    image: gcr.io/cadvisor/cadvisor:v0.45.0
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+      
+  dozzle:
+    <<: *common
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 9999:8080
+
+  prometheus:
+    <<: *common
+    image: prometheus-custom
+    build:
+      context: ./
+      dockerfile: services/prometheus/Dockerfile-prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/etc/prometheus
+    links:
+      - cadvisor
+      - node-exporter
+
+  grafana:
+    <<: *common
+    image: grafana-custom
+    build:
+      context: ./
+      dockerfile: services/grafana/Dockerfile-grafana
+    container_name: grafana
+    ports:
+      - "3030:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin                                                                                                                     
+      - GF_SECURITY_ADMIN_PASSWORD=root
+    links:
+      - prometheus
+
+  mariadb:
+    <<: *common
+    image: mariadb-custom
+    container_name: mariadb
+    build:
+      context: ./
+      dockerfile: services/mariadb/Dockerfile-mariadb
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_ROOT_HOST=%
+    volumes:
+      - mariadb-data:/var/lib/mysql
+
+  phpmyadmin:
+    <<: *common
+    image: phpmyadmin:5.2.1
+    container_name: phpvis
+    ports:
+      - "8090:80"
+    environment:
+      - PMA_HOST=mariadb
+      - PMA_PORT=3306
+    depends_on:
+      - mariadb
